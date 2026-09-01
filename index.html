@@ -1,0 +1,823 @@
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Real-Time Heart Rate Anomaly Detection</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: auto;
+            padding: 30px;
+        }
+
+        h1 {
+            margin-bottom: 5px;
+        }
+
+        .subtitle {
+            color: #94a3b8;
+            margin-bottom: 25px;
+        }
+
+        .cards {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            margin-bottom: 25px;
+        }
+
+        .card {
+            background: #1e293b;
+            border-radius: 12px;
+            padding: 22px;
+            border: 1px solid #334155;
+        }
+
+        .card-title {
+            color: #94a3b8;
+            font-size: 14px;
+            margin-bottom: 10px;
+        }
+
+        .value {
+            font-size: 32px;
+            font-weight: bold;
+        }
+
+        .normal {
+            color: #22c55e;
+        }
+
+        .anomaly {
+            color: #ef4444;
+        }
+
+        .panel {
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 12px;
+            padding: 20px;
+        }
+
+        .dashboard {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 20px;
+        }
+
+        canvas {
+            width: 100%;
+            height: 350px;
+            background: #0b1220;
+            border-radius: 8px;
+        }
+
+        .threshold-panel {
+            margin-bottom: 20px;
+        }
+
+        .threshold-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        #thresholdValue {
+            font-size: 24px;
+            font-weight: bold;
+            color: #38bdf8;
+        }
+
+        #thresholdSlider {
+            width: 100%;
+            cursor: pointer;
+        }
+
+        .status {
+            margin-top: 12px;
+            color: #94a3b8;
+            font-size: 14px;
+        }
+
+        .connected {
+            color: #22c55e;
+        }
+
+        .disconnected {
+            color: #ef4444;
+        }
+
+        .alerts {
+            max-height: 350px;
+            overflow-y: auto;
+        }
+
+        .alert {
+            padding: 12px;
+            margin-bottom: 10px;
+            border-radius: 8px;
+            background: #3f1d1d;
+            border-left: 4px solid #ef4444;
+        }
+
+        .empty-alerts {
+            color: #94a3b8;
+            padding: 15px 0;
+        }
+
+        @media (max-width: 800px) {
+            .cards,
+            .dashboard {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+<div class="container">
+
+    <h1>Real-Time Heart Rate Anomaly Detection</h1>
+
+    <div class="subtitle">
+        Live monitoring powered by FastAPI, WebSocket and Isolation Forest
+    </div>
+
+
+    <!-- Summary Cards -->
+
+    <div class="cards">
+
+        <div class="card">
+            <div class="card-title">
+                Current Heart Rate
+            </div>
+
+            <div class="value">
+                <span id="heartRate">--</span> BPM
+            </div>
+        </div>
+
+
+        <div class="card">
+            <div class="card-title">
+                Prediction
+            </div>
+
+            <div class="value" id="prediction">
+                --
+            </div>
+        </div>
+
+
+        <div class="card">
+            <div class="card-title">
+                Anomaly Score
+            </div>
+
+            <div class="value" id="score">
+                --
+            </div>
+        </div>
+
+    </div>
+
+
+    <!-- Threshold Slider -->
+
+    <div class="panel threshold-panel">
+
+        <h2>Anomaly Sensitivity</h2>
+
+        <div class="threshold-info">
+
+            <label for="thresholdSlider">
+                Detection Threshold
+            </label>
+
+            <span id="thresholdValue">
+                0.00
+            </span>
+
+        </div>
+
+        <input
+            type="range"
+            id="thresholdSlider"
+            min="-0.20"
+            max="0.20"
+            step="0.01"
+            value="0.00"
+        >
+
+        <div class="status" id="thresholdStatus">
+            Threshold ready
+        </div>
+
+    </div>
+
+
+    <!-- Dashboard -->
+
+    <div class="dashboard">
+
+
+        <!-- Canvas Chart -->
+
+        <div class="panel">
+
+            <h2>Live Heart Rate</h2>
+
+            <canvas
+                id="chart"
+                width="800"
+                height="350"
+            ></canvas>
+
+            <div
+                class="status"
+                id="connectionStatus"
+            >
+                Connecting to WebSocket...
+            </div>
+
+        </div>
+
+
+        <!-- Alerts -->
+
+        <div class="panel">
+
+            <h2>Anomaly Alerts</h2>
+
+            <div
+                id="alerts"
+                class="alerts"
+            >
+                <div class="empty-alerts">
+                    No anomalies detected yet.
+                </div>
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+
+<script>
+
+    // =========================================
+    // DOM ELEMENTS
+    // =========================================
+
+    const canvas =
+        document.getElementById("chart");
+
+    const ctx =
+        canvas.getContext("2d");
+
+
+    const heartRateElement =
+        document.getElementById("heartRate");
+
+    const predictionElement =
+        document.getElementById("prediction");
+
+    const scoreElement =
+        document.getElementById("score");
+
+    const alertsElement =
+        document.getElementById("alerts");
+
+
+    const thresholdSlider =
+        document.getElementById("thresholdSlider");
+
+    const thresholdValue =
+        document.getElementById("thresholdValue");
+
+    const thresholdStatus =
+        document.getElementById("thresholdStatus");
+
+
+    const connectionStatus =
+        document.getElementById("connectionStatus");
+
+
+    // =========================================
+    // CHART DATA
+    // =========================================
+
+    const readings = [];
+
+    const maxReadings = 40;
+
+    const minRate = 40;
+
+    const maxRate = 160;
+
+
+    // =========================================
+    // DRAW CANVAS CHART
+    // =========================================
+
+    function drawChart() {
+
+        ctx.clearRect(
+            0,
+            0,
+            canvas.width,
+            canvas.height
+        );
+
+
+        // Grid lines
+
+        ctx.strokeStyle = "#334155";
+
+        ctx.lineWidth = 1;
+
+
+        for (
+            let rate = 40;
+            rate <= 160;
+            rate += 20
+        ) {
+
+            const y =
+                canvas.height -
+                ((rate - minRate) /
+                (maxRate - minRate)) *
+                canvas.height;
+
+
+            ctx.beginPath();
+
+            ctx.moveTo(
+                0,
+                y
+            );
+
+            ctx.lineTo(
+                canvas.width,
+                y
+            );
+
+            ctx.stroke();
+
+
+            ctx.fillStyle = "#94a3b8";
+
+            ctx.font = "12px Arial";
+
+            ctx.fillText(
+                rate + " BPM",
+                8,
+                y - 5
+            );
+        }
+
+
+        if (readings.length < 2) {
+            return;
+        }
+
+
+        // Heart-rate line
+
+        ctx.beginPath();
+
+
+        readings.forEach(
+            (reading, index) => {
+
+                const x =
+                    (index /
+                    (maxReadings - 1)) *
+                    canvas.width;
+
+
+                const y =
+                    canvas.height -
+                    ((reading.heart_rate -
+                    minRate) /
+                    (maxRate - minRate)) *
+                    canvas.height;
+
+
+                if (index === 0) {
+
+                    ctx.moveTo(
+                        x,
+                        y
+                    );
+
+                } else {
+
+                    ctx.lineTo(
+                        x,
+                        y
+                    );
+
+                }
+
+            }
+        );
+
+
+        ctx.strokeStyle = "#38bdf8";
+
+        ctx.lineWidth = 3;
+
+        ctx.stroke();
+
+
+        // Draw points
+
+        readings.forEach(
+            (reading, index) => {
+
+                const x =
+                    (index /
+                    (maxReadings - 1)) *
+                    canvas.width;
+
+
+                const y =
+                    canvas.height -
+                    ((reading.heart_rate -
+                    minRate) /
+                    (maxRate - minRate)) *
+                    canvas.height;
+
+
+                ctx.beginPath();
+
+                ctx.arc(
+                    x,
+                    y,
+                    4,
+                    0,
+                    Math.PI * 2
+                );
+
+
+                ctx.fillStyle =
+                    reading.prediction === "anomaly"
+                    ? "#ef4444"
+                    : "#38bdf8";
+
+
+                ctx.fill();
+
+            }
+        );
+
+    }
+
+
+    // =========================================
+    // ADD ANOMALY ALERT
+    // =========================================
+
+    function addAlert(data) {
+
+        const emptyMessage =
+            alertsElement.querySelector(
+                ".empty-alerts"
+            );
+
+
+        if (emptyMessage) {
+            emptyMessage.remove();
+        }
+
+
+        const alert =
+            document.createElement("div");
+
+
+        alert.className =
+            "alert";
+
+
+        alert.innerHTML = `
+            <strong>Anomaly detected</strong>
+            <br>
+            Heart Rate: ${data.heart_rate} BPM
+            <br>
+            Score: ${data.anomaly_score}
+            <br>
+            <small>${data.timestamp}</small>
+        `;
+
+
+        alertsElement.prepend(
+            alert
+        );
+
+
+        // Keep latest 10 alerts
+
+        while (
+            alertsElement.children.length > 10
+        ) {
+
+            alertsElement.removeChild(
+                alertsElement.lastChild
+            );
+
+        }
+
+    }
+
+
+    // =========================================
+    // HANDLE LIVE READING
+    // =========================================
+
+    function handleReading(data) {
+
+        heartRateElement.textContent =
+            data.heart_rate;
+
+
+        predictionElement.textContent =
+            data.prediction;
+
+
+        scoreElement.textContent =
+            data.anomaly_score;
+
+
+        predictionElement.className =
+            data.prediction === "anomaly"
+            ? "value anomaly"
+            : "value normal";
+
+
+        readings.push(data);
+
+
+        if (
+            readings.length >
+            maxReadings
+        ) {
+
+            readings.shift();
+
+        }
+
+
+        drawChart();
+
+
+        if (
+            data.prediction === "anomaly"
+        ) {
+
+            addAlert(data);
+
+        }
+
+    }
+
+
+    // =========================================
+    // WEBSOCKET CONNECTION
+    // =========================================
+
+    function connectWebSocket() {
+
+        const socket =
+            new WebSocket(
+                "ws://127.0.0.1:8000/ws/heart-rate"
+            );
+
+
+        socket.onopen = () => {
+
+            console.log(
+                "WebSocket connected"
+            );
+
+
+            connectionStatus.textContent =
+                "● WebSocket connected";
+
+
+            connectionStatus.className =
+                "status connected";
+
+        };
+
+
+        socket.onmessage =
+            (event) => {
+
+                const data =
+                    JSON.parse(
+                        event.data
+                    );
+
+
+                console.log(
+                    "Live reading:",
+                    data
+                );
+
+
+                handleReading(data);
+
+            };
+
+
+        socket.onclose = () => {
+
+            console.log(
+                "WebSocket disconnected"
+            );
+
+
+            connectionStatus.textContent =
+                "● WebSocket disconnected. Reconnecting...";
+
+
+            connectionStatus.className =
+                "status disconnected";
+
+
+            setTimeout(
+                connectWebSocket,
+                2000
+            );
+
+        };
+
+
+        socket.onerror = (error) => {
+
+            console.error(
+                "WebSocket error:",
+                error
+            );
+
+        };
+
+    }
+
+
+    // =========================================
+    // THRESHOLD SLIDER
+    // =========================================
+
+    thresholdSlider.addEventListener(
+        "input",
+        async () => {
+
+            const value =
+                parseFloat(
+                    thresholdSlider.value
+                );
+
+
+            thresholdValue.textContent =
+                value.toFixed(2);
+
+
+            thresholdStatus.textContent =
+                "Updating threshold...";
+
+
+            try {
+
+                const response =
+                    await fetch(
+                        "http://127.0.0.1:8000/threshold?value=" +
+                        value,
+                        {
+                            method: "POST"
+                        }
+                    );
+
+
+                if (!response.ok) {
+
+                    throw new Error(
+                        "API request failed"
+                    );
+
+                }
+
+
+                const data =
+                    await response.json();
+
+
+                console.log(
+                    "Threshold updated:",
+                    data
+                );
+
+
+                thresholdStatus.textContent =
+                    "Threshold updated in real time";
+
+
+            } catch (error) {
+
+                console.error(
+                    "Threshold update error:",
+                    error
+                );
+
+
+                thresholdStatus.textContent =
+                    "Could not update threshold";
+
+            }
+
+        }
+    );
+
+
+    // =========================================
+    // GET CURRENT THRESHOLD
+    // =========================================
+
+    async function loadThreshold() {
+
+        try {
+
+            const response =
+                await fetch(
+                    "http://127.0.0.1:8000/threshold"
+                );
+
+
+            const data =
+                await response.json();
+
+
+            const value =
+                Number(
+                    data.threshold
+                );
+
+
+            thresholdSlider.value =
+                value;
+
+
+            thresholdValue.textContent =
+                value.toFixed(2);
+
+
+            thresholdStatus.textContent =
+                "Current threshold loaded";
+
+
+        } catch (error) {
+
+            console.error(
+                "Could not load threshold:",
+                error
+            );
+
+        }
+
+    }
+
+
+    // =========================================
+    // START DASHBOARD
+    // =========================================
+
+    loadThreshold();
+
+    connectWebSocket();
+
+</script>
+
+</body>
+</html>
+```
